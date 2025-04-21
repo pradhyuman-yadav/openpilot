@@ -9,12 +9,9 @@ inputs:
 env:
   # Set noninteractive frontend for apt commands
   DEBIAN_FRONTEND: noninteractive
-  # Define Venv path (adjust if your working directory differs)
-  VENV_PATH: ${{ github.workspace }}/.venv
-  # Define OpenCL download path
+  # Define OpenCL download path (this static path is fine here)
   OPENCL_DOWNLOAD_PATH: /tmp/opencl-downloads
-  # Define path for uv binary if installed manually
-  UV_BIN_PATH: ${{ runner.homedir }}/.local/bin
+  # REMOVED VENV_PATH and UV_BIN_PATH from here as they caused errors
 
 runs:
   using: "composite"
@@ -41,7 +38,7 @@ runs:
       shell: bash
       run: git lfs pull
 
-    # scons build cache (Keep as is, assuming it's needed)
+    # scons build cache
     - id: date
       shell: bash
       run: echo "CACHE_COMMIT_DATE=$(git log -1 --pretty='format:%cd' --date=format:'%Y-%m-%d-%H:%M')" >> $GITHUB_ENV
@@ -60,7 +57,7 @@ runs:
       uses: actions/cache@v4
       with:
         path: /var/cache/apt/archives
-        # IMPORTANT: Create '.github/list_of_apt_packages.txt' with all required packages from the list above, one per line
+        # IMPORTANT: Ensure '.github/list_of_apt_packages.txt' exists and contains all packages listed below
         key: ${{ runner.os }}-apt-${{ hashFiles('.github/list_of_apt_packages.txt') }}
         restore-keys: |
           ${{ runner.os }}-apt-
@@ -70,7 +67,7 @@ runs:
       run: |
         sudo apt-get update
         # Install all packages identified from Dockerfile and install_ubuntu_dependencies.sh
-        # Ensure the list matches the one used for the cache key file!
+        # Ensure this list matches the one used for the cache key file!
         sudo apt-get install -y --no-install-recommends \
           sudo tzdata locales ssh pulseaudio xvfb x11-xserver-utils gnome-screenshot python3-tk python3-dev \
           apt-utils alien unzip tar curl xz-utils dbus gcc-arm-none-eabi tmux vim libx11-6 wget \
@@ -137,9 +134,10 @@ runs:
     - name: Cache Python Venv and uv Cache
       uses: actions/cache@v4
       with:
+        # Use contexts directly here where they ARE available
         path: |
-          ${{ env.VENV_PATH }}
-          ~/.cache/uv
+          ${{ github.workspace }}/.venv
+          ${{ runner.homedir }}/.cache/uv
         key: ${{ runner.os }}-py-${{ hashFiles('**/uv.lock') }}
         restore-keys: |
           ${{ runner.os }}-py-
@@ -147,40 +145,46 @@ runs:
     - name: Setup Python Dependencies
       shell: bash
       run: |
+        # Define paths using standard environment variables available in run steps
+        _VENV_PATH="${GITHUB_WORKSPACE}/.venv"
+        _UV_INSTALL_PATH="${HOME}/.local/bin" # Use HOME for runner.homedir
+
         # Install uv if not present
-        if ! command -v uv &> /dev/null && ! command -v ${{ env.UV_BIN_PATH }}/uv &> /dev/null; then
+        if ! command -v uv &> /dev/null && ! command -v "${_UV_INSTALL_PATH}/uv" &> /dev/null; then
           echo "Installing uv..."
           curl -LsSf https://astral.sh/uv/install.sh | sh
           # Add uv to PATH for subsequent commands in this step
-          export PATH="${{ env.UV_BIN_PATH }}:$PATH"
+          export PATH="${_UV_INSTALL_PATH}:$PATH"
           # Optionally update uv (ignore errors)
-          uv self update || true
+          # uv self update || true # Consider if 'uv' command works directly after install or needs path
+          "${_UV_INSTALL_PATH}/uv" self update || true # Be explicit with path if needed initially
         fi
 
         # Ensure uv is available (use installed path if necessary)
-        UV_COMMAND=$(command -v uv || echo "${{ env.UV_BIN_PATH }}/uv")
+        UV_COMMAND=$(command -v uv || echo "${_UV_INSTALL_PATH}/uv")
 
-        # Create venv
-        python3 -m venv ${{ env.VENV_PATH }}
+        # Create venv using the defined path variable
+        python3 -m venv "$_VENV_PATH"
         # Activate venv
-        source ${{ env.VENV_PATH }}/bin/activate
+        source "$_VENV_PATH/bin/activate"
 
         # Install pip packages using uv
         echo "Installing python packages using uv..."
         export PIP_DEFAULT_TIMEOUT=200
+        # Use the found uv command
         $UV_COMMAND sync --frozen --all-extras uv.lock # Assuming uv.lock is at the root
 
-        # Create .env file
+        # Create .env file using the workspace variable
         echo "Creating .env file..."
-        echo "PYTHONPATH=${PWD}" > ${{ github.workspace }}/.env
+        echo "PYTHONPATH=${GITHUB_WORKSPACE}" > "${GITHUB_WORKSPACE}/.env"
         if [[ "$(uname)" == 'Darwin' ]]; then
-          echo "# msgq doesn't work on mac" >> ${{ github.workspace }}/.env
-          echo "export ZMQ=1" >> ${{ github.workspace }}/.env
-          echo "export OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES" >> ${{ github.workspace }}/.env
+          echo "# msgq doesn't work on mac" >> "${GITHUB_WORKSPACE}/.env"
+          echo "export ZMQ=1" >> "${GITHUB_WORKSPACE}/.env"
+          echo "export OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES" >> "${GITHUB_WORKSPACE}/.env"
         fi
 
-        # Add venv bin to GITHUB_PATH for subsequent steps in the job
-        echo "${{ env.VENV_PATH }}/bin" >> $GITHUB_PATH
+        # Add venv bin to GITHUB_PATH using the defined path variable
+        echo "$_VENV_PATH/bin" >> $GITHUB_PATH
 
     # --- End: Replacing Docker Build ---
 
@@ -194,7 +198,7 @@ runs:
     #   shell: bash
     #   run: |
     #     set -a
-    #     source ${{ github.workspace }}/.env
+    #     source ${GITHUB_WORKSPACE}/.env
     #     set +a
     #     echo "PYTHONPATH=${PYTHONPATH}" >> $GITHUB_ENV
     #     # Export others as needed...
