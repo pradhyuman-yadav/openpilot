@@ -37,14 +37,15 @@ runs:
       shell: bash
       run: echo "CACHE_COMMIT_DATE=$(git log -1 --pretty='format:%cd' --date=format:'%Y-%m-%d-%H:%M')" >> $GITHUB_ENV
 
-    - name: Restore scons cache
-      uses: ./.github/actions/auto-cache
+    - name: Cache scons build artifacts
+      uses: actions/cache@v4
       with:
         path: .ci_cache/scons_cache
         key: scons-${{ runner.arch }}-${{ env.CACHE_COMMIT_DATE }}-${{ github.sha }}
         restore-keys: |
           scons-${{ runner.arch }}-${{ env.CACHE_COMMIT_DATE }}
           scons-${{ runner.arch }}
+
 
     - name: Cache apt packages
       uses: actions/cache@v4
