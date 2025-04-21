@@ -7,43 +7,38 @@ inputs:
     default: 'false'
 
 env:
-  # Set noninteractive frontend for apt commands
   DEBIAN_FRONTEND: noninteractive
-  # Define OpenCL download path (this static path is fine here)
   OPENCL_DOWNLOAD_PATH: /tmp/opencl-downloads
-  # REMOVED VENV_PATH and UV_BIN_PATH from here as they caused errors
 
 runs:
   using: "composite"
   steps:
-    # Assert that this action is retried using the setup-with-retry
-    - shell: bash
+    - name: Enforce usage through setup-with-retry
+      shell: bash
       if: ${{ inputs.is_retried == 'false' }}
       run: |
         echo "You should not run this action directly. Use setup-with-retry instead"
         exit 1
 
-    - shell: bash
-      name: No retries!
+    - name: Fail on GitHub retry attempt
+      shell: bash
       run: |
         if [ "${{ github.run_attempt }}" -gt 1 ]; then
-          echo -e "\033[0;31m##################################################"
-          echo -e "\033[0;31m    Retries not allowed! Fix the flaky test!      "
-          echo -e "\033[0;31m##################################################\033[0m"
+          echo -e "\033[0;31mRetries not allowed! Fix the flaky test!\033[0m"
           exit 1
         fi
 
-    # do this after checkout to ensure our custom LFS config is used to pull from GitLab
     - name: Git LFS Pull
       shell: bash
       run: git lfs pull
 
-    # scons build cache
-    - id: date
+    - name: Generate scons cache key
+      id: date
       shell: bash
       run: echo "CACHE_COMMIT_DATE=$(git log -1 --pretty='format:%cd' --date=format:'%Y-%m-%d-%H:%M')" >> $GITHUB_ENV
-    - id: scons-cache
-      uses: ./.github/workflows/auto-cache
+
+    - name: Restore scons cache
+      uses: ./.github/actions/auto-cache
       with:
         path: .ci_cache/scons_cache
         key: scons-${{ runner.arch }}-${{ env.CACHE_COMMIT_DATE }}-${{ github.sha }}
@@ -51,25 +46,19 @@ runs:
           scons-${{ runner.arch }}-${{ env.CACHE_COMMIT_DATE }}
           scons-${{ runner.arch }}
 
-    # --- Start: Replacing Docker Build ---
-
     - name: Cache apt packages
       uses: actions/cache@v4
       with:
         path: /var/cache/apt/archives
-        # IMPORTANT: Ensure '.github/list_of_apt_packages.txt' exists and contains all packages listed below
         key: ${{ runner.os }}-apt-${{ hashFiles('.github/list_of_apt_packages.txt') }}
-        restore-keys: |
-          ${{ runner.os }}-apt-
+        restore-keys: ${{ runner.os }}-apt-
 
     - name: Install apt packages
       shell: bash
       run: |
         sudo apt-get update
-        # Install all packages identified from Dockerfile and install_ubuntu_dependencies.sh
-        # Ensure this list matches the one used for the cache key file!
         sudo apt-get install -y --no-install-recommends \
-          sudo tzdata locales ssh pulseaudio xvfb x11-xserver-utils gnome-screenshot python3-tk python3-dev \
+          tzdata locales ssh pulseaudio xvfb x11-xserver-utils gnome-screenshot python3-tk python3-dev \
           apt-utils alien unzip tar curl xz-utils dbus gcc-arm-none-eabi tmux vim libx11-6 wget \
           ca-certificates clang build-essential liblzma-dev capnproto libcapnp-dev libcurl4-openssl-dev \
           git git-lfs ffmpeg libavformat-dev libavcodec-dev libavdevice-dev libavutil-dev libavfilter-dev \
@@ -78,127 +67,53 @@ runs:
           libsqlite3-dev libsystemd-dev opencl-headers ocl-icd-libopencl1 ocl-icd-opencl-dev portaudio19-dev \
           qttools5-dev-tools libqt5svg5-dev libqt5serialbus5-dev libqt5x11extras5-dev libqt5opengl5-dev \
           g++-12 qtbase5-dev qtchooser qt5-qmake qtbase5-dev-tools python3-venv
-
-        # Configure locales
         sudo sed -i -e 's/# en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen && sudo locale-gen en_US.UTF-8
-        # Clean apt cache
         sudo rm -rf /var/lib/apt/lists/*
 
     - name: Install udev rules
       shell: bash
       run: |
-        sudo tee /etc/udev/rules.d/12-panda_jungle.rules > /dev/null <<EOF
-        SUBSYSTEM=="usb", ATTRS{idVendor}=="3801", ATTRS{idProduct}=="ddcf", MODE="0666"
-        SUBSYSTEM=="usb", ATTRS{idVendor}=="3801", ATTRS{idProduct}=="ddef", MODE="0666"
-        SUBSYSTEM=="usb", ATTRS{idVendor}=="bbaa", ATTRS{idProduct}=="ddcf", MODE="0666"
-        SUBSYSTEM=="usb", ATTRS{idVendor}=="bbaa", ATTRS{idProduct}=="ddef", MODE="0666"
-        EOF
-                sudo tee /etc/udev/rules.d/11-panda.rules > /dev/null <<EOF
-        SUBSYSTEM=="usb", ATTRS{idVendor}=="0483", ATTRS{idProduct}=="df11", MODE="0666"
-        SUBSYSTEM=="usb", ATTRS{idVendor}=="3801", ATTRS{idProduct}=="ddcc", MODE="0666"
-        SUBSYSTEM=="usb", ATTRS{idVendor}=="3801", ATTRS{idProduct}=="ddee", MODE="0666"
-        SUBSYSTEM=="usb", ATTRS{idVendor}=="bbaa", ATTRS{idProduct}=="ddcc", MODE="0666"
-        SUBSYSTEM=="usb", ATTRS{idVendor}=="bbaa", ATTRS{idProduct}=="ddee", MODE="0666"
-        EOF
-        # Reload rules - ignore errors if udevadm isn't available or fails
+        echo 'Installing udev rules...'
+        echo 'SUBSYSTEM=="usb", ATTRS{idVendor}=="3801", ATTRS{idProduct}=="ddcf", MODE="0666"' | sudo tee /etc/udev/rules.d/12-panda_jungle.rules
+        echo 'SUBSYSTEM=="usb", ATTRS{idVendor}=="0483", ATTRS{idProduct}=="df11", MODE="0666"' | sudo tee /etc/udev/rules.d/11-panda.rules
         sudo udevadm control --reload-rules && sudo udevadm trigger || true
 
-    - name: Cache OpenCL Downloads
+    - name: Cache OpenCL downloads
       uses: actions/cache@v4
       with:
         path: ${{ env.OPENCL_DOWNLOAD_PATH }}
-        key: opencl-downloads-intel-2024.17.3-tbb-2021.12 # Use specific versions/hashes if possible
-        restore-keys: |
-          opencl-downloads-intel-
+        key: opencl-intel-tbb-v1
+        restore-keys: opencl-
 
-    - name: Install OpenCL Driver and TBB
+    - name: Install OpenCL + TBB
       shell: bash
       run: |
-        mkdir -p ${{ env.OPENCL_DOWNLOAD_PATH }}
-        cd ${{ env.OPENCL_DOWNLOAD_PATH }}
-        if [ ! -f oclcpuexp-2024.17.3.0.09_rel.tar.gz ]; then wget https://github.com/intel/llvm/releases/download/2024-WW14/oclcpuexp-2024.17.3.0.09_rel.tar.gz; fi
-        if [ ! -f oneapi-tbb-2021.12.0-lin.tgz ]; then wget https://github.com/oneapi-src/oneTBB/releases/download/v2021.12.0/oneapi-tbb-2021.12.0-lin.tgz; fi
-        sudo mkdir -p /opt/intel/oclcpuexp_2024.17.3.0.09_rel
-        sudo tar -zxvf oclcpuexp-2024.17.3.0.09_rel.tar.gz -C /opt/intel/oclcpuexp_2024.17.3.0.09_rel
-        sudo mkdir -p /etc/OpenCL/vendors
-        echo /opt/intel/oclcpuexp_2024.17.3.0.09_rel/x64/libintelocl.so | sudo tee /etc/OpenCL/vendors/intel_expcpu.icd > /dev/null
-        sudo mkdir -p /opt/intel
-        sudo tar -zxvf oneapi-tbb-2021.12.0-lin.tgz -C /opt/intel
-        sudo ln -sf /opt/intel/oneapi-tbb-2021.12.0/lib/intel64/gcc4.8/libtbb.so /opt/intel/oclcpuexp_2024.17.3.0.09_rel/x64/libtbb.so
-        sudo ln -sf /opt/intel/oneapi-tbb-2021.12.0/lib/intel64/gcc4.8/libtbbmalloc.so /opt/intel/oclcpuexp_2024.17.3.0.09_rel/x64/libtbbmalloc.so
-        sudo ln -sf /opt/intel/oneapi-tbb-2021.12.0/lib/intel64/gcc4.8/libtbb.so.12 /opt/intel/oclcpuexp_2024.17.3.0.09_rel/x64/libtbb.so.12
-        sudo ln -sf /opt/intel/oneapi-tbb-2021.12.0/lib/intel64/gcc4.8/libtbbmalloc.so.2 /opt/intel/oclcpuexp_2024.17.3.0.09_rel/x64/libtbbmalloc.so.2
-        echo /opt/intel/oclcpuexp_2024.17.3.0.09_rel/x64 | sudo tee /etc/ld.so.conf.d/libintelopenclexp.conf > /dev/null
+        mkdir -p $OPENCL_DOWNLOAD_PATH && cd $OPENCL_DOWNLOAD_PATH
+        wget -nc https://github.com/intel/llvm/releases/download/2024-WW14/oclcpuexp-2024.17.3.0.09_rel.tar.gz
+        wget -nc https://github.com/oneapi-src/oneTBB/releases/download/v2021.12.0/oneapi-tbb-2021.12.0-lin.tgz
+        sudo mkdir -p /opt/intel/oclcpuexp
+        sudo tar -zxvf oclcpuexp-*.tar.gz -C /opt/intel/oclcpuexp --strip-components=1
+        sudo mkdir -p /opt/intel/tbb
+        sudo tar -zxvf oneapi-tbb-*.tgz -C /opt/intel/tbb --strip-components=1
+        echo /opt/intel/oclcpuexp/x64/libintelocl.so | sudo tee /etc/OpenCL/vendors/intel_expcpu.icd
         sudo ldconfig
 
-    - name: Cache Python Venv and uv Cache
+    - name: Cache Python venv + uv
       uses: actions/cache@v4
       with:
-        # Use contexts directly here where they ARE available
         path: |
-          ${{ github.workspace }}/.venv
-          ${{ runner.homedir }}/.cache/uv
-        key: ${{ runner.os }}-py-${{ hashFiles('**/uv.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-py-
+          .venv
+          ~/.cache/uv
+        key: ${{ runner.os }}-python-${{ hashFiles('uv.lock') }}
+        restore-keys: ${{ runner.os }}-python-
 
-    - name: Setup Python Dependencies
+    - name: Setup Python env
       shell: bash
       run: |
-        # Define paths using standard environment variables available in run steps
-        _VENV_PATH="${GITHUB_WORKSPACE}/.venv"
-        _UV_INSTALL_PATH="${HOME}/.local/bin" # Use HOME for runner.homedir
-
-        # Install uv if not present
-        if ! command -v uv &> /dev/null && ! command -v "${_UV_INSTALL_PATH}/uv" &> /dev/null; then
-          echo "Installing uv..."
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          # Add uv to PATH for subsequent commands in this step
-          export PATH="${_UV_INSTALL_PATH}:$PATH"
-          # Optionally update uv (ignore errors)
-          # uv self update || true # Consider if 'uv' command works directly after install or needs path
-          "${_UV_INSTALL_PATH}/uv" self update || true # Be explicit with path if needed initially
-        fi
-
-        # Ensure uv is available (use installed path if necessary)
-        UV_COMMAND=$(command -v uv || echo "${_UV_INSTALL_PATH}/uv")
-
-        # Create venv using the defined path variable
-        python3 -m venv "$_VENV_PATH"
-        # Activate venv
-        source "$_VENV_PATH/bin/activate"
-
-        # Install pip packages using uv
-        echo "Installing python packages using uv..."
-        export PIP_DEFAULT_TIMEOUT=200
-        # Use the found uv command
-        $UV_COMMAND sync --frozen --all-extras uv.lock # Assuming uv.lock is at the root
-
-        # Create .env file using the workspace variable
-        echo "Creating .env file..."
-        echo "PYTHONPATH=${GITHUB_WORKSPACE}" > "${GITHUB_WORKSPACE}/.env"
-        if [[ "$(uname)" == 'Darwin' ]]; then
-          echo "# msgq doesn't work on mac" >> "${GITHUB_WORKSPACE}/.env"
-          echo "export ZMQ=1" >> "${GITHUB_WORKSPACE}/.env"
-          echo "export OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES" >> "${GITHUB_WORKSPACE}/.env"
-        fi
-
-        # Add venv bin to GITHUB_PATH using the defined path variable
-        echo "$_VENV_PATH/bin" >> $GITHUB_PATH
-
-    # --- End: Replacing Docker Build ---
-
-    # Add any steps here to start services if needed by downstream jobs
-    # - name: Start Xvfb
-    #   shell: bash
-    #   run: Xvfb :99 -screen 0 1024x768x16 &
-
-    # Add step to source .env if needed by downstream steps?
-    # - name: Export env vars from .env file
-    #   shell: bash
-    #   run: |
-    #     set -a
-    #     source ${GITHUB_WORKSPACE}/.env
-    #     set +a
-    #     echo "PYTHONPATH=${PYTHONPATH}" >> $GITHUB_ENV
-    #     # Export others as needed...
+        curl -LsSf https://astral.sh/uv/install.sh | sh
+        export PATH="$HOME/.local/bin:$PATH"
+        python3 -m venv .venv
+        source .venv/bin/activate
+        uv sync --frozen --all-extras uv.lock
+        echo "PYTHONPATH=${GITHUB_WORKSPACE}" > .env
+        echo ".venv/bin" >> $GITHUB_PATH
