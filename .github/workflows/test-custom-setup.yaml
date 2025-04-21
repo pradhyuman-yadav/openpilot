@@ -1,0 +1,50 @@
+name: Test Custom Setup (Dispatch)
+
+# Allows manual triggering from the Actions tab
+on:
+  workflow_dispatch:
+
+jobs:
+  test-setup:
+    runs-on: ubuntu-latest # Use a standard runner
+
+    steps:
+      # Step 1: Check out the code from your fork/branch
+      #         Need lfs: true because the setup action runs 'git lfs pull'
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      # Step 2: Run the setup-with-retry action (which uses your modified setup action)
+      #         This is the action we want to test and measure
+      - name: Run openpilot Env Setup (with retry)
+        uses: ./.github/workflows/setup-with-retry
+        id: setup # Give it an id to check outcome if needed
+
+      # Step 3: (Optional but Recommended) Basic Verification
+      #         Run a simple command to check if the environment seems okay.
+      #         This assumes your setup action added the venv/bin to the PATH.
+      - name: Verify Environment (Basic)
+        if: steps.setup.outcome == 'success' # Only run if setup succeeded
+        shell: bash
+        run: |
+          echo "Setup completed successfully. Verifying environment..."
+          echo "Python version:"
+          python --version
+          echo "which python:"
+          which python
+          echo "Installed uv packages:"
+          # Assumes uv is in the PATH after setup
+          uv pip list
+          echo "Environment verification complete."
+
+      # Add more verification steps here if needed, e.g.,
+      # try importing a key library or running a very simple openpilot script.
+
+      # Fail job explicitly if setup failed (optional, job might fail anyway)
+      - name: Check Setup Outcome
+        if: steps.setup.outcome != 'success'
+        run: |
+          echo "Setup step failed!"
+          exit 1
