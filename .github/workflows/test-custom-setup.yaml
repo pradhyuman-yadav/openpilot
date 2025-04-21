@@ -2,7 +2,9 @@ name: Test Custom Setup (Dispatch)
 
 # Allows manual triggering from the Actions tab
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - ci-speedup-native
 
 jobs:
   test-setup:
